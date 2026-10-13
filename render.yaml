@@ -1,0 +1,23 @@
+# Render.com 一键部署配置（免费版可用）
+# 用法：把整个 meteor-wish 文件夹传到 GitHub 仓库，然后在 Render 里选 New -> Blueprint，
+#      选中这个仓库，它会自动读取本文件并把网站跑起来，几分钟后给你一个 https://xxx.onrender.com 链接。
+services:
+  - type: web
+    name: meteor-wish
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: ROOM
+        value: sky
+      # 免费实例使用临时磁盘：重启/重新部署后 data/wishes.json 会重置（旧心愿丢失）。
+      # 想长期保留心愿：换成带持久磁盘的实例，启用下面两段并把 DATA_DIR 指到挂载目录。
+      # - key: DATA_DIR
+      #   value: /var/data
+#    disk:
+#      name: wish-data
+#      mountPath: /var/data
+#      sizeGB: 1

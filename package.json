@@ -1,0 +1,11 @@
+{
+  "name": "meteor-wish",
+  "version": "1.0.0",
+  "private": true,
+  "description": "对着流星许下愿望 —— 单文件星空许愿页 + 零依赖实时后端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" }
+}
