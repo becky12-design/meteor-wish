@@ -91,10 +91,14 @@ html,body{height:100%;margin:0;background:#000;color:#fff;overflow:hidden;oversc
 .send.busy{background:#cfd4e6}
 
 /* ---------- 飞行中的愿望 ---------- */
-.fly{position:fixed;z-index:26;pointer-events:none;transform-origin:50% 50%;
-  font-size:15px;color:#fff;text-shadow:0 0 12px rgba(180,200,255,.85),0 0 30px rgba(140,160,255,.5);
-  white-space:pre-wrap;max-width:78vw;text-align:center;
-  transition:transform .92s cubic-bezier(.3,.05,.2,1),opacity .92s ease-in}
+.pop{position:fixed;left:50%;z-index:26;pointer-events:none;width:max-content;max-width:84vw;
+  text-align:center;opacity:0;transform:translate(-50%,-50%) scale(.82);filter:blur(6px);
+  transition:opacity .62s ease,transform .62s cubic-bezier(.2,1.25,.35,1),filter .62s ease}
+.pop.in{opacity:1;transform:translate(-50%,-50%) scale(1);filter:blur(0)}
+.pop .ptext{font-size:clamp(19px,5.6vw,30px);line-height:1.5;font-weight:500;color:#fff;
+  white-space:pre-wrap;word-break:break-word;text-shadow:0 0 12px rgba(205,225,255,.95),0 0 32px rgba(150,180,255,.6),0 0 62px rgba(120,150,255,.35)}
+.pop.other .ptext{font-size:clamp(17px,5vw,26px);opacity:.94}
+.pop .pname{margin-top:9px;font-size:12.5px;color:rgba(255,255,255,.62);letter-spacing:.4px;text-shadow:none}
 
 /* ---------- 愿望卡片 ---------- */
 .card{position:fixed;z-index:27;max-width:min(78vw,320px);padding:13px 15px 11px;border-radius:18px;
@@ -704,11 +708,11 @@ function addWish(w, opt) {
   if (!w || !String(w.text || '').trim()) return null;
   var ts = Number(w.ts) || Date.now();
   var key = (w.clientId || '') + '|' + ts + '|' + String(w.text);
-  if (w.id && seen[w.id]) return seen[w.id];
+  if (w.id && seen[w.id]) { seen[w.id]._new = false; return seen[w.id]; }
   if (w.clientId && seenKey[key]) {              // 自己的同一条（本地先行 / 服务器回执 / SSE 广播）
     var old = seenKey[key];
     if (w.id) { delete seen[old.id]; old.id = w.id; seen[w.id] = old; }
-    old.pending = false; old.ts = ts;
+    old.pending = false; old.ts = ts; old._new = false;
     return old;
   }
   var item = {
@@ -721,6 +725,7 @@ function addWish(w, opt) {
     pending: !!w.pending,
     star: { appear: opt.animate ? 0 : 1, flash: opt.animate ? 0 : 1, ph: Math.random() * 6.283, selected: false, hold: !!opt.animate }
   };
+  item._new = true;
   if (w.id) seen[w.id] = item;
   if (w.clientId) seenKey[key] = item;
   all.push(item);
@@ -822,7 +827,11 @@ function connectStream() {
     es = new EventSource(CFG.api + '/api/stream?room=' + encodeURIComponent(CFG.room));
   } catch (e) { startPolling(); return; }
   es.addEventListener('wish', function (e) {
-    try { addWish(JSON.parse(e.data)); } catch (err) {}
+    try {
+      var w = JSON.parse(e.data);
+      var it = addWish(w, { animate: w.clientId !== MY_ID });
+      if (it && it._new && w.clientId !== MY_ID) revealWish(it, {});
+    } catch (err) {}
   });
   es.addEventListener('presence', function (e) {
     try {
@@ -839,7 +848,12 @@ function startPolling() {
   pollTimer = setInterval(function () {
     api('/api/wishes?room=' + encodeURIComponent(CFG.room) + '&limit=120').then(function (res) {
       var list = (res && res.wishes) || [];
-      for (var i = 0; i < list.length; i++) addWish(list[i], { instant: true });
+      for (var i = 0; i < list.length; i++) {
+        var w = list[i];
+        var fresh = w.clientId !== MY_ID && (Date.now() - w.ts) < 20000;
+        var it = addWish(w, { animate: fresh });
+        if (it && it._new && fresh) revealWish(it, {});
+      }
     }).catch(function () {});
   }, 6000);
 }
@@ -948,7 +962,7 @@ function send() {
   inputEl.value = '';
   autoGrow();
   if (item) {
-    flyToSky(text, item);
+    revealWish(item, {});
     warmMeteor(item);
   }
   showBanner(CFG.bannerTitle, CFG.bannerSub);   // 输入任何内容都会出现
@@ -956,32 +970,67 @@ function send() {
   vibrate(14);
   postWish(local);
 }
-function flyToSky(text, item) {
-  if (reduced()) { item.star.hold = false; item.star.appear = 1; item.star.flash = 1; return; }
+/* ---------- 心愿弹出：先在天上亮出文字，再慢慢散去、落成一颗星 ---------- */
+var LANES = [0.20, 0.35, 0.50];
+var laneBusy = [false, false, false];
+var popQueue = [];
+
+function revealWish(item, opts) {
+  if (!item || !item.star) return;
+  if (reduced() || popQueue.length > 6) {
+    item.star.hold = false; item.star.appear = 1; item.star.flash = 1;
+    return;
+  }
+  popQueue.push({ item: item, opts: opts || {} });
+  pumpPop();
+}
+function pumpPop() {
+  if (!popQueue.length) return;
+  var slot = laneBusy.indexOf(false);
+  if (slot < 0) return;
+  laneBusy[slot] = true;
+  var job = popQueue.shift();
+  showPop(job.item, job.opts, slot);
+}
+function showPop(item, opts, slot) {
+  var mine = !!item.mine;
   var el = document.createElement('div');
-  el.className = 'fly';
-  el.textContent = text;
-  var sx = W / 2, sy = H - 64;
-  el.style.left = sx + 'px';
-  el.style.top = sy + 'px';
-  el.style.transform = 'translate(-50%,-50%) scale(1)';
-  el.style.opacity = '1';
+  el.className = 'pop' + (mine ? '' : ' other');
+  var textEl = document.createElement('div');
+  textEl.className = 'ptext';
+  textEl.textContent = item.text;
+  el.appendChild(textEl);
+  if (!mine && item.name) {
+    var nEl = document.createElement('div');
+    nEl.className = 'pname';
+    nEl.textContent = item.name + ' 许下';
+    el.appendChild(nEl);
+  }
+  var cx = W / 2, cy = H * LANES[slot];
+  el.style.left = cx + 'px';
+  el.style.top = cy + 'px';
   document.body.appendChild(el);
-  var box = el.getBoundingClientRect();
-  var dx = item.star.x - (box.left + box.width / 2);
-  var dy = item.star.y - (box.top + box.height / 2);
-  requestAnimationFrame(function () {
-    el.style.transform = 'translate(-50%,-50%) translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(.34)';
-    el.style.opacity = '0.12';
-  });
+  requestAnimationFrame(function () { el.classList.add('in'); });
+  var chars = String(item.text).length;
+  var hold = clamp(1400 + chars * 130, 1400, 3400) + (mine ? 500 : 0);
+  var fade = mine ? 1800 : 1500;
   setTimeout(function () {
-    if (el.parentNode) el.parentNode.removeChild(el);
-    item.star.hold = false;
-    item.star.appear = 0.001;
-    item.star.flash = 1;
-    Sound.soft();
-    spawnMeteor({ x: item.star.x + rnd(120, 260) * S, y: item.star.y - rnd(90, 170) * S, speed: rnd(760, 1080), len: rnd(220, 330) });
-  }, 940);
+    var dx = item.star.x - cx, dy = item.star.y - cy;
+    el.style.transition = 'opacity ' + fade + 'ms linear, transform ' + fade + 'ms cubic-bezier(.45,0,.75,1), filter ' + fade + 'ms linear';
+    el.style.transform = 'translate(-50%,-50%) translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(.24)';
+    el.style.opacity = '0';
+    el.style.filter = 'blur(3px)';
+    setTimeout(function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+      item.star.hold = false;
+      item.star.appear = 0.001;
+      item.star.flash = 1;
+      laneBusy[slot] = false;
+      pumpPop();
+      Sound.soft();
+      spawnMeteor({ x: item.star.x + rnd(140, 300) * S, y: item.star.y - rnd(90, 180) * S, speed: rnd(760, 1080), len: rnd(220, 330) });
+    }, fade + 80);
+  }, 620 + hold);
 }
 function warmMeteor(item) {
   spawnMeteor({ x: item.star.x + rnd(200, 380) * S, y: item.star.y - rnd(120, 220) * S, speed: rnd(700, 1000) });
